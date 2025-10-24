@@ -1,18 +1,10 @@
-export {};
-
-function getSite(url: string) {
-  try {
-    const u = new URL(url);
-    const parts = u.hostname.split('.');
-    return parts.length <= 2 ? u.hostname : parts.slice(-2).join('.');
-  } catch { return ''; }
-}
+import { getSiteFromUrl } from '../shared/site';
 
 function send(msg: any) { return new Promise<any>(res => chrome.runtime.sendMessage(msg, (r) => res(r))); }
 
 (async function () {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const site = getSite(tab?.url || '');
+  const site = getSiteFromUrl(tab?.url);
   (document.getElementById('site')!).textContent = site || '未知站点';
   const prefs = (await send({ type: 'GET_PREFS' }))?.prefs as any;
   const current = prefs?.siteModes?.[site] || 'auto';

@@ -1,25 +1,27 @@
-
-// Minimal static copier: copies everything that isn't .ts from src/ to dist/
 import fs from 'fs';
 import path from 'path';
+import { pathToFileURL } from 'url';
 
-const SRC = 'src';
-const DIST = 'dist';
-
-function copyDir(src, dest) {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src)) {
-    const s = path.join(src, entry);
-    const d = path.join(dest, entry);
-    const stat = fs.statSync(s);
+// Copies every non-TypeScript asset from src/ to dist/
+export function copyStaticAssets(srcDir = 'src', destDir = 'dist') {
+  if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir)) {
+    const sourcePath = path.join(srcDir, entry);
+    const targetPath = path.join(destDir, entry);
+    const stat = fs.statSync(sourcePath);
     if (stat.isDirectory()) {
-      copyDir(s, d);
-    } else {
-      if (!s.endsWith('.ts')) {
-        fs.copyFileSync(s, d);
-      }
+      copyStaticAssets(sourcePath, targetPath);
+      continue;
     }
+    if (/\.(ts|tsx)$/.test(sourcePath)) continue;
+    fs.copyFileSync(sourcePath, targetPath);
   }
 }
-copyDir(SRC, DIST);
-console.log('Static assets copied to dist/');
+
+if (process.argv[1]) {
+  const invokedAsScript = pathToFileURL(process.argv[1]).href === import.meta.url;
+  if (invokedAsScript) {
+    copyStaticAssets();
+    console.log('Static assets copied to dist/');
+  }
+}

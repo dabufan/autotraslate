@@ -4,17 +4,19 @@
   "private": true,
   "description": "Auto-translate any foreign webpage to the user's preferred language — browser extension MVP (MV3).",
   "scripts": {
-    "build": "tsc && node scripts/copy-static.mjs",
-    "watch": "tsc -w",
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
     "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
     "prepare": "echo \"Run: npm install && npm run build\"",
     "build:zip": "node tools/publish/make-zip.mjs",
     "publish:chrome": "node tools/publish/chrome/publish.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "rimraf": "^6.0.1",
+    "@types/chrome": "^0.0.262",
     "archiver": "^7.0.1",
-    "@types/chrome": "^0.0.262"
+    "esbuild": "^0.25.11",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.3"
   }
 }

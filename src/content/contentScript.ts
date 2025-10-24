@@ -1,29 +1,7 @@
+import { getRegistrableDomain } from '../shared/site';
+
 // AutoTranslate MVP - content script
 type Decision = { ok:boolean, targetLang:string, sourceLang?:string, reason?:string, mode:'always'|'never'|'auto' };
-
-const MULTI_PART_SUFFIXES = new Set([
-  'co.uk','org.uk','gov.uk','ac.uk',
-  'com.au','net.au','org.au',
-  'co.jp','ne.jp','or.jp',
-  'com.br','com.cn','com.hk','com.sg','com.tw','com.tr','com.mx','com.ar','com.co','com.pe','com.ph',
-  'co.in','co.kr','co.za'
-]);
-
-function getSite(hostname: string): string {
-  const rawParts = hostname.split('.').filter(Boolean);
-  if (rawParts.length <= 2) return hostname;
-  const parts = rawParts.map(p => p.toLowerCase());
-  for (const suffix of MULTI_PART_SUFFIXES) {
-    const suffixParts = suffix.split('.');
-    if (parts.length > suffixParts.length) {
-      const tail = parts.slice(-suffixParts.length).join('.');
-      if (tail === suffix) {
-        return rawParts.slice(-(suffixParts.length + 1)).join('.');
-      }
-    }
-  }
-  return rawParts.slice(-2).join('.');
-}
 
 function isVisible(node: Text): boolean {
   const el = node.parentElement;
@@ -43,17 +21,40 @@ const state = {
   decision: null as Decision | null,
   originalMap: new WeakMap<Text, string>(),
   processed: new WeakSet<Text>(),
-  observer: null as IntersectionObserver | null,
 
   translating: false,
   site: ''
 };
 
 const translateQueue: Text[] = [];
-const queued = new WeakSet<Text>();
+let queued = new WeakSet<Text>();
+let flushScheduled = false;
+const drainResolvers: Array<() => void> = [];
+
+const intersection = {
+  observer: null as IntersectionObserver | null,
+  pending: new Map<Element, Set<Text>>()
+};
+
+const scheduleTask: (fn: () => void) => void =
+  typeof queueMicrotask === 'function'
+    ? queueMicrotask
+    : (fn) => Promise.resolve().then(fn);
 
 function post<T=any, R=any>(msg: T): Promise<R> {
-  return new Promise((resolve) => chrome.runtime.sendMessage(msg, (res:R) => resolve(res)));
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(msg, (res:R) => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+          return;
+        }
+        resolve(res);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 function setPendingAttr(pending: boolean) {
@@ -84,6 +85,18 @@ function stopPendingIndicator() {
   }
 }
 
+function resolveDrainResolvers() {
+  while (drainResolvers.length) {
+    const resolver = drainResolvers.shift();
+    try { resolver?.(); } catch {}
+  }
+}
+
+function waitForQueueDrain(): Promise<void> {
+  if (!state.translating && translateQueue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => drainResolvers.push(resolve));
+}
+
 function collectTextNodes(root: Node): Text[] {
   const out: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -100,6 +113,82 @@ function collectTextNodes(root: Node): Text[] {
   let n: Node | null;
   while ((n = walker.nextNode())) out.push(n as Text);
   return out;
+}
+
+const BATCH_SIZE = 60;
+
+function enqueueForTranslation(nodes: Text[]): boolean {
+  let added = false;
+  for (const node of nodes) {
+    if (!node) continue;
+    if (state.processed.has(node) || queued.has(node)) continue;
+    const text = (node.nodeValue || '').trim();
+    if (!text) continue;
+    translateQueue.push(node);
+    queued.add(node);
+    added = true;
+  }
+  if (added) {
+    startPendingIndicator();
+    scheduleFlush();
+  }
+  return added;
+}
+
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  scheduleTask(() => {
+    flushQueue().catch((err) => console.warn('flushQueue error', err));
+  });
+}
+
+async function flushQueue() {
+  if (state.translating) {
+    flushScheduled = false;
+    return;
+  }
+  flushScheduled = false;
+  state.translating = true;
+  try {
+    while (translateQueue.length) {
+      const chunkNodes: Text[] = [];
+      const texts: string[] = [];
+      while (chunkNodes.length < BATCH_SIZE && translateQueue.length) {
+        const candidate = translateQueue.shift()!;
+        queued.delete(candidate);
+        if (!candidate.isConnected) continue;
+        if (state.processed.has(candidate)) continue;
+        const text = (candidate.nodeValue || '').trim();
+        if (!text) {
+          state.processed.add(candidate);
+          continue;
+        }
+        chunkNodes.push(candidate);
+        texts.push(text);
+      }
+      if (!chunkNodes.length) continue;
+      let out: string[] = texts;
+      try {
+        out = await translateBatch(texts, state.decision!.targetLang, state.decision!.sourceLang);
+      } catch (err) {
+        console.warn('Translation batch failed', err);
+        translateQueue.length = 0;
+        queued = new WeakSet<Text>();
+      }
+      applyTranslations(chunkNodes, out);
+      chunkNodes.forEach((n) => state.processed.add(n));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } finally {
+    state.translating = false;
+    if (translateQueue.length) {
+      scheduleFlush();
+      return;
+    }
+    stopPendingIndicator();
+    resolveDrainResolvers();
+  }
 }
 
 async function translateBatch(texts: string[], targetLang: string, sourceLang?: string): Promise<string[]> {
@@ -176,40 +265,15 @@ async function doTranslate(nodes: Text[]) {
     if (state.processed.has(n)) continue;
     (isVisible(n) ? visible : hidden).push(n);
   }
-  if (visible.length) await doTranslateBatched(visible);
+  if (visible.length) await doTranslateBatched(visible, true);
   // Observe the rest for when they enter viewport
-  setupIntersectionObserver(hidden);
+  queueIntersectionObservation(hidden);
 }
 
-async function doTranslateBatched(nodes: Text[]) {
-  for (const node of nodes) {
-    if (!node || state.processed.has(node) || queued.has(node)) continue;
-    translateQueue.push(node);
-    queued.add(node);
-  }
-  if (state.translating) return;
-  state.translating = true;
-  try {
-    const BATCH = 60; // number of text nodes per call
-    while (translateQueue.length) {
-      const chunkNodes: Text[] = [];
-      while (chunkNodes.length < BATCH && translateQueue.length) {
-        const candidate = translateQueue.shift()!;
-        queued.delete(candidate);
-        if (state.processed.has(candidate)) continue;
-        if (!candidate.isConnected) continue;
-        chunkNodes.push(candidate);
-      }
-      if (!chunkNodes.length) continue;
-      const texts = chunkNodes.map(n => (n.nodeValue || '').trim());
-      const out = await translateBatch(texts, state.decision!.targetLang, state.decision!.sourceLang);
-      applyTranslations(chunkNodes, out);
-      stopPendingIndicator();
-      chunkNodes.forEach(n => state.processed.add(n));
-      await new Promise(r => setTimeout(r, 0));
-    }
-  } finally {
-    state.translating = false;
+async function doTranslateBatched(nodes: Text[], awaitCompletion = false) {
+  enqueueForTranslation(nodes);
+  if (awaitCompletion) {
+    await waitForQueueDrain();
   }
 }
 
@@ -228,7 +292,7 @@ function observeMutations() {
       }
     }
     if (added.length) {
-      setupIntersectionObserver(added);
+      queueIntersectionObservation(added);
     }
   });
   obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
@@ -246,7 +310,7 @@ function bindKeyboard() {
 (async function main() {
   try {
     const url = location.href;
-    const site = getSite(location.hostname);
+    const site = getRegistrableDomain(location.hostname);
     state.site = site;
     startPendingIndicator();
     const res = await post({ type: 'INIT', url, docLang: document.documentElement.lang || undefined, site }) as any;
@@ -281,29 +345,46 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 
-function setupIntersectionObserver(candidates: Text[]) {
-  try { state.observer?.disconnect(); } catch {}
-  if (!candidates.length) return;
-  const map = new Map<Element, Text[]>();
-  for (const t of candidates) {
-    const el = t.parentElement; if (!el) continue;
-    const arr = map.get(el) || [];
-    arr.push(t);
-    map.set(el, arr);
-  }
-  const obs = new IntersectionObserver(async (entries) => {
+function ensureIntersectionObserver(): IntersectionObserver {
+  if (intersection.observer) return intersection.observer;
+  intersection.observer = new IntersectionObserver((entries) => {
     const toTranslate: Text[] = [];
-    for (const e of entries) {
-      if (e.isIntersecting) {
-        const arr = map.get(e.target as Element) || [];
-        for (const t of arr) if (!state.processed.has(t)) toTranslate.push(t);
-        obs.unobserve(e.target);
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const target = entry.target as Element;
+      const set = intersection.pending.get(target);
+      if (!set) {
+        intersection.observer?.unobserve(target);
+        continue;
       }
+      intersection.pending.delete(target);
+      set.forEach((node) => {
+        if (state.processed.has(node)) return;
+        toTranslate.push(node);
+      });
+      intersection.observer?.unobserve(target);
     }
-    if (toTranslate.length) await doTranslateBatched(toTranslate);
+    if (toTranslate.length) enqueueForTranslation(toTranslate);
   }, { root: null, rootMargin: '128px', threshold: 0 });
-  map.forEach((_, el) => { obs.observe(el); });
-  state.observer = obs;
+  return intersection.observer;
+}
+
+function queueIntersectionObservation(candidates: Text[]) {
+  if (!candidates.length) return;
+  const obs = ensureIntersectionObserver();
+  for (const node of candidates) {
+    if (!node || !node.isConnected) continue;
+    if (state.processed.has(node)) continue;
+    const el = node.parentElement;
+    if (!el) continue;
+    let set = intersection.pending.get(el);
+    if (!set) {
+      set = new Set<Text>();
+      intersection.pending.set(el, set);
+    }
+    set.add(node);
+    obs.observe(el);
+  }
 }
 
 

@@ -1,48 +1,16 @@
-export {};
-
-type DeepSeekProvider = {
-  type: 'deepseek';
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
-type QwenProvider = {
-  type: 'qwen';
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
-type LibreProvider = {
-  type: 'libre';
-  baseUrl: string;
-  apiKey?: string;
-}
-type Glossary = {
-  pairs: { src: string; tgt: string }[];
-  protect: string[];
-}
-type Prefs = {
-  targetLang: string;
-  autoTranslate: boolean;
-  provider: DeepSeekProvider | LibreProvider | QwenProvider;
-  siteModes: Record<string,'always'|'never'|'auto'>;
-  glossary: Glossary;
-};
-const DEFAULTS: Prefs = {
-  targetLang: (navigator.language || 'en').split('-')[0],
-  autoTranslate: true,
-  provider: { type: 'qwen', baseUrl: 'https://dashscope.aliyuncs.com', apiKey: '', model: 'qwen-turbo' },
-  siteModes: {},
-  glossary: { pairs: [], protect: [] }
-};
+import type { DeepSeekProvider, LibreProvider, Prefs, QwenProvider } from '../shared/prefs';
+import { withPrefDefaults } from '../shared/prefs';
 
 function getPrefs(): Promise<Prefs> {
-  return new Promise((resolve) => chrome.storage.sync.get(['prefs'], (res) => {
-    resolve(res?.prefs || DEFAULTS);
-  }));
+  return new Promise((resolve) =>
+    chrome.storage.sync.get(['prefs'], (res) => {
+      resolve(withPrefDefaults(res?.prefs as Partial<Prefs> | undefined));
+    })
+  );
 }
 function setPrefs(p: Prefs): Promise<void> {
-  return new Promise((resolve) => chrome.storage.sync.set({ prefs: p }, () => resolve()));
+  const payload = withPrefDefaults(p);
+  return new Promise((resolve) => chrome.storage.sync.set({ prefs: payload }, () => resolve()));
 }
 function show(el: HTMLElement, on: boolean) { el.classList.toggle('hidden', !on); }
 

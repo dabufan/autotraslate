@@ -1,4 +1,6 @@
-export {};
+import type { DeepSeekProvider, Glossary, LibreProvider, Prefs, QwenProvider } from '../shared/prefs';
+import { withPrefDefaults } from '../shared/prefs';
+import { getRegistrableDomain } from '../shared/site';
 
 // AutoTranslate MVP - MV3 service worker
 // Enhancements: IndexedDB persistent cache + Glossary (pairs & protect terms) + DeepSeek JSON batch + tabs.detectLanguage
@@ -9,51 +11,6 @@ type Message =
   | { type: 'GET_PREFS'; site?: string }
   | { type: 'SET_SITE_PREF'; site: string; mode: 'always'|'never'|'auto' }
   | { type: 'METRIC'; name: string; value: number };
-
-type DeepSeekProvider = {
-  type: 'deepseek';
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-};
-type QwenProvider = {
-  type: 'qwen';
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-};
-
-type LibreProvider = {
-  type: 'libre';
-  baseUrl: string;
-  apiKey?: string;
-};
-
-type Glossary = {
-  pairs: { src: string; tgt: string }[];
-  protect: string[]; // do-not-translate terms
-};
-
-type Prefs = {
-  targetLang: string;
-  autoTranslate: boolean;
-  siteModes: Record<string, 'always'|'never'|'auto'>;
-  provider: DeepSeekProvider | LibreProvider | QwenProvider;
-  glossary: Glossary;
-};
-
-const DEFAULT_PREFS: Prefs = {
-  targetLang: (navigator.language || 'en').split('-')[0],
-  autoTranslate: true,
-  siteModes: {},
-  provider: {
-    type: 'qwen',
-    baseUrl: 'https://dashscope.aliyuncs.com',
-    apiKey: '',
-    model: 'qwen-turbo'
-  },
-  glossary: { pairs: [], protect: [] }
-};
 
 // ---- Small helpers ----
 function stableHash(s: string): string {
@@ -123,30 +80,6 @@ function parseLLMArray(raw: string): string[] | null {
     }
   }
   return null;
-}
-const MULTI_PART_SUFFIXES = new Set([
-  'co.uk','org.uk','gov.uk','ac.uk',
-  'com.au','net.au','org.au',
-  'co.jp','ne.jp','or.jp',
-  'com.br','com.cn','com.hk','com.sg','com.tw','com.tr','com.mx','com.ar','com.co','com.pe','com.ph',
-  'co.in','co.kr','co.za'
-]);
-
-function getSite(hostname?: string) {
-  if (!hostname) return '';
-  const rawParts = hostname.split('.').filter(Boolean);
-  if (rawParts.length <= 2) return hostname;
-  const parts = rawParts.map(p => p.toLowerCase());
-  for (const suffix of MULTI_PART_SUFFIXES) {
-    const suffixParts = suffix.split('.');
-    if (parts.length > suffixParts.length) {
-      const tail = parts.slice(-suffixParts.length).join('.');
-      if (tail === suffix) {
-        return rawParts.slice(-(suffixParts.length + 1)).join('.');
-      }
-    }
-  }
-  return rawParts.slice(-2).join('.');
 }
 function detectByHeuristic(sample: string): string | undefined {
   const cjk = /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/;
@@ -225,14 +158,17 @@ async function idbPutMany(entries: {k:string, v:string}[]): Promise<void> {
 // ---- Prefs ----
 async function getPrefs(): Promise<Prefs> {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['prefs'], (res) => resolve((res?.prefs as Prefs) || DEFAULT_PREFS));
+    chrome.storage.sync.get(['prefs'], (res) => {
+      resolve(withPrefDefaults(res?.prefs as Partial<Prefs> | undefined));
+    });
   });
 }
 async function setSitePref(site: string, mode: 'always'|'never'|'auto') {
   const prefs = await getPrefs();
   prefs.siteModes = prefs.siteModes || {};
   prefs.siteModes[site] = mode;
-  await new Promise<void>((resolve) => chrome.storage.sync.set({ prefs }, () => resolve()));
+  const payload = withPrefDefaults(prefs);
+  await new Promise<void>((resolve) => chrome.storage.sync.set({ prefs: payload }, () => resolve()));
 }
 
 // ---- Providers ----
@@ -789,7 +725,7 @@ async function chooseProvider(): Promise<{translateBatch: (texts:string[], targe
 async function shouldTranslate(url: string, fallbackDocLang?: string, tabId?: number): Promise<{ok:boolean, targetLang:string, sourceLang?:string, reason?:string, mode:'always'|'never'|'auto'}> {
   const prefs = await getPrefs();
   const u = new URL(url);
-  const site = getSite(u.hostname);
+  const site = getRegistrableDomain(u.hostname);
   const mode = prefs.siteModes?.[site] || 'auto';
   if (mode === 'never') return { ok:false, targetLang: prefs.targetLang, mode, reason: 'site-never' };
   if (mode === 'always') return { ok:true, targetLang: prefs.targetLang, mode, reason: 'site-always' };
