@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "AutoTranslate MVP",
+  "description": "无感自动把外语网页翻译成你的首选语言。",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "AutoTranslate",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "permissions": [
+    "contextMenus",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/contentScript.js"
+      ],
+      "css": [
+        "ui/toggle.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "toggle-translation": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+T",
+        "mac": "Ctrl+Shift+T"
+      },
+      "description": "Toggle translate on this page"
+    }
+  }
+}

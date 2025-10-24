@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AutoTranslate 设置</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>AutoTranslate 设置</h1>
+      <section>
+        <label>目标语言（首选）：
+          <input id="targetLang" placeholder="例如 zh, en, ja, ko" />
+        </label>
+      </section>
+      <section>
+        <label>
+          <input type="checkbox" id="autoTranslate" />
+          自动翻译与我不同语言的网页
+        </label>
+      </section>
+      <section>
+        <h2>翻译服务</h2>
+        <label><input type="radio" name="provider" value="deepseek" checked /> DeepSeek（默认，OpenAI 兼容）</label>
+        <div id="deepseekFields" class="fieldset">
+          <label>Base URL：<input id="dsBaseUrl" placeholder="https://api.deepseek.com" /></label>
+          <label>API Key：<input id="dsApiKey" placeholder="你的 DeepSeek API Key" /></label>
+          <label>Model：<input id="dsModel" placeholder="deepseek-chat" /></label>
+        </div>
+        <label><input type="radio" name="provider" value="libre" /> LibreTranslate（备选）</label>
+        <div id="libreFields" class="fieldset hidden">
+          <label>Base URL：<input id="lbBaseUrl" placeholder="https://libretranslate.com" /></label>
+          <label>API Key（如需要）：<input id="lbApiKey" /></label>
+        </div>
+      </section>
+      <section>
+        <h2>术语与保护</h2>
+        <div class="fieldset">
+          <label class="block">术语表（每行一个，格式：<code>源语=目标</code>）</label>
+          <textarea id="glossaryPairs" rows="6" placeholder="LLM=大语言模型&#10;OpenAI=OpenAI（不翻译）"></textarea>
+          <p class="hint">当文本中出现左边的“源语”时，强制输出为右侧的“目标”。</p>
+        </div>
+        <div class="fieldset">
+          <label class="block">不翻译词（逗号或换行分隔）</label>
+          <textarea id="protectTerms" rows="4" placeholder="CPU, GPU, Python, React"></textarea>
+          <p class="hint">这些词将被保护：在翻译前会被占位，翻译后恢复原样。</p>
+        </div>
+      </section>
+      <section>
+        <button id="save">保存</button>
+        <span id="saved" class="muted"></span>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

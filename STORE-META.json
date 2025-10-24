@@ -1,0 +1,19 @@
+{
+  "name": "AutoTranslate — 无感网页自动翻译",
+  "short_description": "打开外语网页，秒变你的语言。首屏优先，术语可控，支持 DeepSeek/Libre。",
+  "category": "Accessibility",
+  "privacy_policy": "PRIVACY.md",
+  "screenshots": [
+    "assets/screenshots/shot-1280x800-1.png",
+    "assets/screenshots/shot-1280x800-2.png",
+    "assets/screenshots/shot-1280x800-3.png"
+  ],
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png",
+    "256": "assets/icons/icon256.png",
+    "512": "assets/icons/icon512.png"
+  }
+}
