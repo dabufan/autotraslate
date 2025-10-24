@@ -1,7 +1,7 @@
 const DEFAULTS = {
     targetLang: (navigator.language || 'en').split('-')[0],
     autoTranslate: true,
-    provider: { type: 'deepseek', baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat' },
+    provider: { type: 'qwen', baseUrl: 'https://dashscope.aliyuncs.com', apiKey: '', model: 'qwen-turbo' },
     siteModes: {},
     glossary: { pairs: [], protect: [] }
 };
@@ -31,8 +31,12 @@ function parseProtect(raw) {
     const targetLang = document.getElementById('targetLang');
     const autoTranslate = document.getElementById('autoTranslate');
     const provRadios = Array.from(document.querySelectorAll('input[name="provider"]'));
+    const qwFields = document.getElementById('qwenFields');
     const dsFields = document.getElementById('deepseekFields');
     const lbFields = document.getElementById('libreFields');
+    const qwBaseUrl = document.getElementById('qwBaseUrl');
+    const qwApiKey = document.getElementById('qwApiKey');
+    const qwModel = document.getElementById('qwModel');
     const dsBaseUrl = document.getElementById('dsBaseUrl');
     const dsApiKey = document.getElementById('dsApiKey');
     const dsModel = document.getElementById('dsModel');
@@ -44,11 +48,18 @@ function parseProtect(raw) {
     const prefs = await getPrefs();
     targetLang.value = prefs.targetLang || '';
     autoTranslate.checked = !!prefs.autoTranslate;
-    const isDS = (prefs.provider?.type || 'deepseek') === 'deepseek';
-    provRadios.forEach(r => r.checked = (r.value === (isDS ? 'deepseek' : 'libre')));
-    show(dsFields, isDS);
-    show(lbFields, !isDS);
-    if (isDS) {
+    const providerType = (prefs.provider?.type || 'qwen');
+    provRadios.forEach(r => r.checked = (r.value === providerType));
+    show(qwFields, providerType === 'qwen');
+    show(dsFields, providerType === 'deepseek');
+    show(lbFields, providerType === 'libre');
+    if (providerType === 'qwen') {
+        const p = prefs.provider;
+        qwBaseUrl.value = p.baseUrl || 'https://dashscope.aliyuncs.com';
+        qwApiKey.value = p.apiKey || '';
+        qwModel.value = p.model || 'qwen-turbo';
+    }
+    else if (providerType === 'deepseek') {
         const p = prefs.provider;
         dsBaseUrl.value = p.baseUrl || 'https://api.deepseek.com';
         dsApiKey.value = p.apiKey || '';
@@ -64,13 +75,22 @@ function parseProtect(raw) {
     protectTerms.value = (prefs.glossary?.protect || []).join(', ');
     provRadios.forEach(r => r.addEventListener('change', () => {
         const chosen = document.querySelector('input[name="provider"]:checked').value;
+        show(qwFields, chosen === 'qwen');
         show(dsFields, chosen === 'deepseek');
         show(lbFields, chosen === 'libre');
     }));
     document.getElementById('save').addEventListener('click', async () => {
         const chosen = document.querySelector('input[name="provider"]:checked').value;
         let provider;
-        if (chosen === 'deepseek') {
+        if (chosen === 'qwen') {
+            provider = {
+                type: 'qwen',
+                baseUrl: (qwBaseUrl.value || 'https://dashscope.aliyuncs.com').trim(),
+                apiKey: (qwApiKey.value || '').trim(),
+                model: (qwModel.value || 'qwen-turbo').trim()
+            };
+        }
+        else if (chosen === 'deepseek') {
             provider = {
                 type: 'deepseek',
                 baseUrl: (dsBaseUrl.value || 'https://api.deepseek.com').trim(),

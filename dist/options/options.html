@@ -22,8 +22,14 @@
       </section>
       <section>
         <h2>翻译服务</h2>
-        <label><input type="radio" name="provider" value="deepseek" checked /> DeepSeek（默认，OpenAI 兼容）</label>
-        <div id="deepseekFields" class="fieldset">
+        <label><input type="radio" name="provider" value="qwen" checked /> 千问 Qwen（默认）</label>
+        <div id="qwenFields" class="fieldset">
+          <label>Base URL：<input id="qwBaseUrl" placeholder="https://dashscope.aliyuncs.com" /></label>
+          <label>API Key：<input id="qwApiKey" placeholder="你的千问 API Key" /></label>
+          <label>Model：<input id="qwModel" placeholder="qwen-turbo" /></label>
+        </div>
+        <label><input type="radio" name="provider" value="deepseek" /> DeepSeek（OpenAI 兼容）</label>
+        <div id="deepseekFields" class="fieldset hidden">
           <label>Base URL：<input id="dsBaseUrl" placeholder="https://api.deepseek.com" /></label>
           <label>API Key：<input id="dsApiKey" placeholder="你的 DeepSeek API Key" /></label>
           <label>Model：<input id="dsModel" placeholder="deepseek-chat" /></label>

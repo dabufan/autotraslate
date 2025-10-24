@@ -44,10 +44,12 @@ const state = {
     translating: false,
     site: ''
 };
+const translateQueue = [];
+const queued = new WeakSet();
 function post(msg) {
     return new Promise((resolve) => chrome.runtime.sendMessage(msg, (res) => resolve(res)));
 }
-function setPending(pending) {
+function setPendingAttr(pending) {
     try {
         if (pending)
             document.documentElement.setAttribute('data-autotrans', 'pending');
@@ -55,6 +57,27 @@ function setPending(pending) {
             document.documentElement.removeAttribute('data-autotrans');
     }
     catch { }
+}
+let pendingTimer = null;
+let pendingApplied = false;
+function startPendingIndicator() {
+    if (pendingApplied || pendingTimer != null)
+        return;
+    pendingTimer = window.setTimeout(() => {
+        pendingTimer = null;
+        pendingApplied = true;
+        setPendingAttr(true);
+    }, 200);
+}
+function stopPendingIndicator() {
+    if (pendingTimer != null) {
+        window.clearTimeout(pendingTimer);
+        pendingTimer = null;
+    }
+    if (pendingApplied) {
+        pendingApplied = false;
+        setPendingAttr(false);
+    }
 }
 function collectTextNodes(root) {
     const out = [];
@@ -157,16 +180,34 @@ async function doTranslate(nodes) {
     setupIntersectionObserver(hidden);
 }
 async function doTranslateBatched(nodes) {
+    for (const node of nodes) {
+        if (!node || state.processed.has(node) || queued.has(node))
+            continue;
+        translateQueue.push(node);
+        queued.add(node);
+    }
     if (state.translating)
         return;
     state.translating = true;
     try {
         const BATCH = 60; // number of text nodes per call
-        for (let i = 0; i < nodes.length; i += BATCH) {
-            const chunkNodes = nodes.slice(i, i + BATCH);
+        while (translateQueue.length) {
+            const chunkNodes = [];
+            while (chunkNodes.length < BATCH && translateQueue.length) {
+                const candidate = translateQueue.shift();
+                queued.delete(candidate);
+                if (state.processed.has(candidate))
+                    continue;
+                if (!candidate.isConnected)
+                    continue;
+                chunkNodes.push(candidate);
+            }
+            if (!chunkNodes.length)
+                continue;
             const texts = chunkNodes.map(n => (n.nodeValue || '').trim());
             const out = await translateBatch(texts, state.decision.targetLang, state.decision.sourceLang);
             applyTranslations(chunkNodes, out);
+            stopPendingIndicator();
             chunkNodes.forEach(n => state.processed.add(n));
             await new Promise(r => setTimeout(r, 0));
         }
@@ -212,11 +253,11 @@ function bindKeyboard() {
         const url = location.href;
         const site = getSite(location.hostname);
         state.site = site;
-        setPending(true);
+        startPendingIndicator();
         const res = await post({ type: 'INIT', url, docLang: document.documentElement.lang || undefined, site });
         const decision = res?.decision || { ok: false, targetLang: 'en', mode: 'auto' };
         state.decision = decision;
-        const unmount = mountToggle();
+        mountToggle();
         bindKeyboard();
         if (decision.ok) {
             const nodes = collectTextNodes(document.body);
@@ -230,7 +271,7 @@ function bindKeyboard() {
         console.warn('AutoTranslate error', e);
     }
     finally {
-        setPending(false);
+        stopPendingIndicator();
     }
 })();
 chrome.runtime.onMessage.addListener((msg) => {

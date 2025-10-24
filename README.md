@@ -60,27 +60,29 @@ src/
 ## 许可证
 MIT
 
-## 使用 DeepSeek 作为翻译引擎
+## 翻译后端与配置
 
-默认已切为 **DeepSeek**（OpenAI 兼容）调用：
-- Base URL：`https://api.deepseek.com`
-- Endpoint：`/chat/completions`
+默认使用 **千问 Qwen**：
+- Base URL：`https://dashscope.aliyuncs.com`
+- Endpoint：`/api/v1/services/aigc/text-generation/generation`
 - 鉴权：`Authorization: Bearer <API_KEY>`
-- 模型：`deepseek-chat`（也可填 `deepseek-reasoner` 等）
+- 模型推荐：`qwen-turbo`（也可填写其他兼容模型，例如 `qwen-plus` 等）
 
-> 以上信息来自官方文档，实际以 DeepSeek 最新文档为准。
+在设置页选择“千问 Qwen”并填写你的 API Key/模型即可使用。
 
-在设置页填入你的 DeepSeek API Key 与模型名即可使用。
+你也可以改用其他后端：
+- **DeepSeek**（OpenAI 兼容 `/chat/completions`）：填入 Base URL、API Key 与模型名（如 `deepseek-chat`）。
+- **LibreTranslate**：支持自建或公共节点，按需填写 Base URL 和可选的 API Key。
 
 
 ## 新增增强
-- DeepSeek **批量 JSON 翻译**：一次请求翻一批文本，要求模型只返回 `{ "t": [ ... ] }`，解析失败自动回退逐条翻译。
+- LLM **批量 JSON 翻译**（Qwen / DeepSeek）：一次请求翻一批文本，要求模型只返回 `{ "t": [ ... ] }`，解析失败自动回退逐条翻译。
 - 使用 `chrome.tabs.detectLanguage` 优先检测页面语言，失败时回退 `documentElement.lang` 与启发式检测。
 
 
 ## 术语表 & 保护词
 - 设置页新增 **术语表**（`源语=目标` 每行一个）和 **不翻译词**（逗号或换行分隔）。
-- DeepSeek 路径下，术语表会被强约束到系统指令，保护词在翻译前会被占位并在翻译后恢复；LibreTranslate 也会应用保护词占位策略。
+- LLM 路径下（Qwen、DeepSeek），术语表会被强约束到系统指令，保护词在翻译前会被占位并在翻译后恢复；LibreTranslate 同样会应用保护词占位策略。
 
 ## 持久化缓存（IndexedDB）
 - 后台使用 IndexedDB 作为**持久 KV 缓存**，键包含 `provider+model+source+target+glossarySig+text`，扩展重载后仍可命中。

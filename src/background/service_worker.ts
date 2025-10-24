@@ -16,6 +16,12 @@ type DeepSeekProvider = {
   apiKey: string;
   model: string;
 };
+type QwenProvider = {
+  type: 'qwen';
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
 
 type LibreProvider = {
   type: 'libre';
@@ -32,7 +38,7 @@ type Prefs = {
   targetLang: string;
   autoTranslate: boolean;
   siteModes: Record<string, 'always'|'never'|'auto'>;
-  provider: DeepSeekProvider | LibreProvider;
+  provider: DeepSeekProvider | LibreProvider | QwenProvider;
   glossary: Glossary;
 };
 
@@ -41,10 +47,10 @@ const DEFAULT_PREFS: Prefs = {
   autoTranslate: true,
   siteModes: {},
   provider: {
-    type: 'deepseek',
-    baseUrl: 'https://api.deepseek.com',
+    type: 'qwen',
+    baseUrl: 'https://dashscope.aliyuncs.com',
     apiKey: '',
-    model: 'deepseek-chat'
+    model: 'qwen-turbo'
   },
   glossary: { pairs: [], protect: [] }
 };
@@ -58,6 +64,65 @@ function stableHash(s: string): string {
 function keyFor(text: string, src?: string, dst?: string, providerKey: string = 'p', glosSig: string = ''): string {
   const k = `${providerKey}:${src||'auto'}:${dst||'auto'}:${glosSig}:${text}`;
   return stableHash(k);
+}
+
+function normalizeLLMText(raw: string): string {
+  if (!raw) return '';
+  let s = raw.trim();
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  }
+  if (/^json\b/i.test(s)) {
+    s = s.replace(/^json\b[:\s]*/i, '').trim();
+  }
+  // remove leading & trailing quotes if wrapped accidentally
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s.trim();
+}
+
+function extractStrings(val: any): string[] | null {
+  if (!val) return null;
+  const out: string[] = [];
+  const push = (v: any) => {
+    if (typeof v === 'string') out.push(v);
+    else if (v && typeof v.text === 'string') out.push(v.text);
+    else if (v && typeof v.content === 'string') out.push(v.content);
+  };
+  if (Array.isArray(val)) {
+    val.forEach(push);
+  } else if (Array.isArray(val.t)) {
+    val.t.forEach(push);
+  } else if (Array.isArray(val.translations)) {
+    val.translations.forEach(push);
+  } else if (Array.isArray(val.data)) {
+    val.data.forEach(push);
+  } else {
+    return null;
+  }
+  return out.length ? out.map(normalizeLLMText) : null;
+}
+
+function parseLLMArray(raw: string): string[] | null {
+  if (!raw) return null;
+  const attempts: string[] = [];
+  const normalized = normalizeLLMText(raw);
+  if (normalized) attempts.push(normalized);
+  const braceMatch = normalized.match(/\{[\s\S]*\}/);
+  if (braceMatch) attempts.push(braceMatch[0]);
+  const arrayMatch = normalized.match(/\[[\s\S]*\]/);
+  if (arrayMatch) attempts.push(arrayMatch[0]);
+  for (const cand of attempts) {
+    try {
+      const parsed = JSON.parse(cand);
+      const arr = extractStrings(parsed);
+      if (arr) return arr;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 const MULTI_PART_SUFFIXES = new Set([
   'co.uk','org.uk','gov.uk','ac.uk',
@@ -301,18 +366,9 @@ class DeepSeekTranslator {
         if (resp.status === 401 || resp.status === 403) authError = true;
         if (!resp.ok) throw new Error(`DeepSeek HTTP ${resp.status}`);
         const data = await resp.json();
-        const content = data?.choices?.[0]?.message?.content;
-        let arr: any = null;
-        try {
-          const obj = JSON.parse(content);
-          if (obj && Array.isArray(obj.t)) arr = obj.t;
-          else if (Array.isArray(obj)) arr = obj;
-          else if (obj && Array.isArray(obj.translations)) arr = obj.translations;
-        } catch {
-          const match = content && content.match(/\[\s*"(?:[^"\\]|\\.)*"\s*(?:,\s*"(?:[^"\\]|\\.)*"\s*)*\]/s);
-          if (match) { try { arr = JSON.parse(match[0]); } catch {} }
-        }
-        if (arr && Array.isArray(arr)) translations = arr.map((x:any)=> typeof x==='string'?x:'');
+        const content = data?.choices?.[0]?.message?.content ?? '';
+        const arr = parseLLMArray(typeof content === 'string' ? content : JSON.stringify(content));
+        if (arr) translations = arr;
       } catch (e) {
         console.warn('DeepSeek batch translate error', e);
       }
@@ -371,10 +427,265 @@ class DeepSeekTranslator {
       });
       if (!resp.ok) throw new Error(`DeepSeek HTTP ${resp.status}`);
       const data = await resp.json();
-      const out = data?.choices?.[0]?.message?.content ?? text;
-      return out;
+      const out = data?.choices?.[0]?.message?.content;
+      if (out) {
+        if (typeof out === 'string') {
+          const arr = parseLLMArray(out);
+          if (arr?.length) return arr[0];
+          const cleaned = normalizeLLMText(out);
+          if (cleaned) return cleaned;
+        } else {
+          const str = JSON.stringify(out);
+          const arr = parseLLMArray(str);
+          if (arr?.length) return arr[0];
+        }
+      }
+      return text;
     } catch (e) {
       console.warn('DeepSeek translate error', e);
+      return text;
+    }
+  }
+}
+
+class QwenTranslator {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  glosSig: string;
+  glossary: Glossary;
+  constructor(baseUrl: string, apiKey: string, model: string, glossary: Glossary) {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.apiKey = (apiKey || '').trim();
+    this.model = model || 'qwen-turbo';
+    this.glossary = glossary || { pairs: [], protect: [] };
+    this.glosSig = stableHash(JSON.stringify(this.glossary));
+  }
+
+  private buildSystemPrompt(target: string, source?: string) {
+    const parts: string[] = [];
+    parts.push(`You are a professional translation engine.`);
+    parts.push(`Translate the user's text into target language (${target}).`);
+    parts.push(source ? `The source language is ${source}.` : `Detect the source language automatically.`);
+    if (this.glossary?.protect?.length) {
+      parts.push(`Do NOT translate these protected terms (preserve exact casing and spelling): ${this.glossary.protect.join(', ')}`);
+    }
+    if (this.glossary?.pairs?.length) {
+      const pairsDesc = this.glossary.pairs.map(p => `"${p.src}" -> "${p.tgt}"`).join('; ');
+      parts.push(`Glossary mappings (enforce exact output for matched source terms): ${pairsDesc}`);
+    }
+    parts.push(`Preserve punctuation, numbers, inline code, and URLs. Do not add explanations or quotes.`);
+    parts.push(`Return a JSON object with key "t" containing an array of translated strings in the same order as input texts.`);
+    return parts.join(' ');
+  }
+
+  private mask(texts: string[]) {
+    const terms = (this.glossary?.protect || []).filter(Boolean).sort((a,b)=>b.length-a.length);
+    if (!terms.length) return { masked: texts, maps: [] as {token:string, term:string}[][] };
+    const maps: {token:string, term:string}[][] = [];
+    const masked = texts.map((t, idx) => {
+      let out = t;
+      const m: {token:string, term:string}[] = [];
+      terms.forEach((term, j) => {
+        if (!term) return;
+        const token = `§§P${j}§§`;
+        const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        if (re.test(out)) {
+          out = out.replace(re, token);
+          m.push({ token, term });
+        }
+      });
+      maps[idx] = m;
+      return out;
+    });
+    return { masked, maps };
+  }
+  private unmask(texts: string[], maps: {token:string, term:string}[][]) {
+    if (!maps.length) return texts;
+    return texts.map((t, i) => {
+      let out = t;
+      for (const m of maps[i] || []) {
+        const re = new RegExp(m.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        out = out.replace(re, m.term);
+      }
+      return out;
+    });
+  }
+
+  private endpoint(): string {
+    return `${this.baseUrl}/api/v1/services/aigc/text-generation/generation`;
+  }
+
+  async translateBatch(texts: string[], target: string, source?: string): Promise<string[]> {
+    if (!this.apiKey) {
+      console.warn('Qwen API key missing, skip translation batch.');
+      return texts;
+    }
+    const keys = texts.map(t => keyFor((t||'').trim(), source, target, 'qw:'+this.model, this.glosSig));
+    const memHits = keys.map(k => memoryCache.get(k));
+    const needIdxs: number[] = [];
+    for (let i=0;i<keys.length;i++) if (!memHits[i]) needIdxs.push(i);
+
+    let idbHits: (string|undefined)[] = [];
+    if (needIdxs.length) {
+      const idbKeys = needIdxs.map(i => keys[i]);
+      const vals = await idbGetMany(idbKeys);
+      idbHits = new Array(keys.length);
+      needIdxs.forEach((i, j) => { idbHits[i] = vals[j]; if (vals[j]) memoryCache.set(keys[i], vals[j]!); });
+    }
+
+    const out = new Array<string>(texts.length);
+    for (let i=0;i<texts.length;i++) {
+      out[i] = memHits[i] || idbHits[i] || '';
+    }
+
+    const toTranslate: { index:number, text:string }[] = [];
+    for (let i=0;i<texts.length;i++) {
+      const t = (texts[i] ?? '').trim();
+      if (!t) { out[i] = t; continue; }
+      if (!out[i]) toTranslate.push({ index:i, text:t });
+    }
+    if (!toTranslate.length) return out;
+
+    const { masked, maps } = this.mask(toTranslate.map(x => x.text));
+
+    const MAX_CHARS = 6000;
+    let start = 0;
+    const toPersist: {k:string, v:string}[] = [];
+    while (start < masked.length) {
+      let end = start, sum = 0;
+      while (end < masked.length && (sum + masked[end].length) <= MAX_CHARS) { sum += masked[end].length; end++; }
+      const slice = masked.slice(start, end);
+      const sys = this.buildSystemPrompt(target, source);
+      const userPayload = { target, source: source || 'auto', texts: slice };
+      const body: any = {
+        model: this.model,
+        input: {
+          messages: [
+            { role: 'system', content: [{ text: sys }] },
+            { role: 'user', content: [{ text: JSON.stringify(userPayload) }] }
+          ]
+        },
+        parameters: {
+          result_format: 'json'
+        }
+      };
+      let translations: string[] | null = null;
+      let authError = false;
+      try {
+        const resp = await fetch(this.endpoint(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+          body: JSON.stringify(body)
+        });
+        if (resp.status === 401 || resp.status === 403) authError = true;
+        if (!resp.ok) throw new Error(`Qwen HTTP ${resp.status}`);
+        const data = await resp.json();
+        const messageContent = data?.output?.choices?.[0]?.message?.content;
+        let textBlob = '';
+        if (Array.isArray(messageContent)) {
+          textBlob = messageContent.map((item: any) => {
+            if (typeof item === 'string') return item;
+            if (item?.text) return item.text;
+            return '';
+          }).join('').trim();
+        } else if (typeof messageContent === 'string') {
+          textBlob = messageContent;
+        } else if (messageContent?.text) {
+          textBlob = messageContent.text;
+        } else if (typeof data?.output?.text === 'string') {
+          textBlob = data.output.text;
+        }
+        const arr = parseLLMArray(textBlob);
+        if (arr) translations = arr;
+      } catch (e) {
+        console.warn('Qwen batch translate error', e);
+      }
+      if (!translations) {
+        if (authError) {
+          for (let j=0;j<slice.length;j++) {
+            const targetIndex = toTranslate[start + j].index;
+            const srcText = toTranslate[start + j].text;
+            out[targetIndex] = srcText;
+          }
+          start = end;
+          continue;
+        }
+        translations = [];
+        for (const s of slice) translations.push(await this.translateOne(s, target, source));
+      }
+
+      const unmasked = this.unmask(translations, maps.slice(start, end));
+      for (let j=0;j<unmasked.length;j++) {
+        const targetIndex = toTranslate[start + j].index;
+        const srcText = toTranslate[start + j].text;
+        const tr = unmasked[j] || srcText;
+        out[targetIndex] = tr;
+        const k = keys[targetIndex];
+        memoryCache.set(k, tr);
+        toPersist.push({ k, v: tr });
+      }
+      trimMemCache();
+      start = end;
+    }
+
+    if (toPersist.length) await idbPutMany(toPersist);
+    return out;
+  }
+
+  private async translateOne(text: string, target: string, source?: string): Promise<string> {
+    if (!this.apiKey) return text;
+    const sys = this.buildSystemPrompt(target, source);
+    const body: any = {
+      model: this.model,
+      input: {
+        messages: [
+          { role: 'system', content: [{ text: sys }] },
+          { role: 'user', content: [{ text }] }
+        ]
+      }
+    };
+    try {
+      const resp = await fetch(this.endpoint(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) throw new Error(`Qwen HTTP ${resp.status}`);
+      const data = await resp.json();
+      const messageContent = data?.output?.choices?.[0]?.message?.content;
+      if (Array.isArray(messageContent)) {
+        const combined = messageContent.map((part:any)=> typeof part === 'string' ? part : part?.text || '').join('').trim();
+        const arr = parseLLMArray(combined);
+        if (arr?.length) return arr[0];
+        const cleaned = normalizeLLMText(combined);
+        if (cleaned) return cleaned;
+        return combined || text;
+      }
+      if (typeof messageContent === 'string') {
+        const arr = parseLLMArray(messageContent);
+        if (arr?.length) return arr[0];
+        const cleaned = normalizeLLMText(messageContent);
+        if (cleaned) return cleaned;
+        return messageContent || text;
+      }
+      if (messageContent?.text) {
+        const arr = parseLLMArray(messageContent.text);
+        if (arr?.length) return arr[0];
+        const cleaned = normalizeLLMText(messageContent.text);
+        if (cleaned) return cleaned;
+        return messageContent.text || text;
+      }
+      if (typeof data?.output?.text === 'string') {
+        const arr = parseLLMArray(data.output.text);
+        if (arr?.length) return arr[0];
+        const cleaned = normalizeLLMText(data.output.text);
+        if (cleaned) return cleaned;
+        return data.output.text || text;
+      }
+      return text;
+    } catch (e) {
+      console.warn('Qwen translate error', e);
       return text;
     }
   }
@@ -447,7 +758,17 @@ async function chooseProvider(): Promise<{translateBatch: (texts:string[], targe
   const prefs = await getPrefs();
   const glossary = prefs.glossary || { pairs: [], protect: [] };
   const glosSig = stableHash(JSON.stringify(glossary));
-  if (prefs.provider?.type === 'deepseek') {
+  if (prefs.provider?.type === 'qwen') {
+    const p = prefs.provider as QwenProvider;
+    const apiKey = (p.apiKey || '').trim();
+    if (!apiKey) {
+      console.warn('Qwen provider selected but API key is empty. Falling back to LibreTranslate.');
+      const fallback = new LibreTranslator('https://libretranslate.com', undefined, glossary);
+      return { translateBatch: fallback.translateBatch.bind(fallback), providerKey: 'lb', glosSig };
+    }
+    const inst = new QwenTranslator(p.baseUrl || 'https://dashscope.aliyuncs.com', apiKey, p.model || 'qwen-turbo', glossary);
+    return { translateBatch: inst.translateBatch.bind(inst), providerKey: 'qw:'+p.model, glosSig };
+  } else if (prefs.provider?.type === 'deepseek') {
     const p = prefs.provider as DeepSeekProvider;
     const apiKey = (p.apiKey || '').trim();
     if (!apiKey) {

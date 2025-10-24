@@ -2,7 +2,7 @@
 # Chrome 商店上架文案（可直接粘贴，按需精简）
 
 **名称**：AutoTranslate — 无感网页自动翻译  
-**简短描述（tagline）**：打开外语网页，秒变你的语言。首屏优先，术语可控，支持 DeepSeek/Libre 后端。
+**简短描述（tagline）**：打开外语网页，秒变你的语言。首屏优先，术语可控，支持 Qwen/DeepSeek/Libre 后端。
 
 ## 详细描述
 AutoTranslate 让你在浏览外语网页时——**无需手动点任何按钮**——自动把页面翻译成你的首选语言（默认跟随系统/浏览器）。
@@ -17,13 +17,13 @@ AutoTranslate 让你在浏览外语网页时——**无需手动点任何按钮*
 - **快捷键**：Ctrl+Shift+T 在“原文/已译”间随时切换。
 
 ### 后端与隐私
-- 默认支持 **DeepSeek**（OpenAI 兼容 `/chat/completions`）与 **LibreTranslate**。
+- 默认支持 **千问 Qwen**（DashScope 文本生成 API），也兼容 **DeepSeek** 与 **LibreTranslate**。
 - 你可以在设置页切换后端、配置 API Key、模型名与服务地址。
 - 我们默认不会翻译表单输入框、密码/邮箱/电话等敏感输入区域。
 - 支持本地与持久缓存（IndexedDB），减小重复请求和成本。
 
 ### 使用方法
-1. 安装扩展后，进入设置页选择翻译后端（默认 DeepSeek），填写 API Key。
+1. 安装扩展后，进入设置页选择翻译后端（默认千问 Qwen），填写 API Key。
 2. 访问外语网页，即可自动翻译；右下角小按钮和 Ctrl+Shift+T 可快速切换原文/已译状态。
 3. 选中文本 → 右键 → 可将词汇加入“不翻译词”或“术语表”。
 
